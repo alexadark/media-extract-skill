@@ -141,45 +141,8 @@ Deep structured summary of content from any source.
 **Steps:**
 
 1. Get content (fetch YouTube transcript + metadata, fetch article, or use pasted text)
-2. Analyze and extract key information
-
-**Output format:**
-
-```markdown
-# Summary: [Title]
-
-- **Source:** [URL or "pasted text"]
-- **Type:** [YouTube video / Article / Transcript / Text]
-- **Channel:** @handle (X subscribers)
-- **Published:** YYYY-MM-DD
-- **Duration:** MM:SS
-- **Views:** X | **Likes:** Y | **Engagement:** Z%
-- **Tags:** tag1, tag2, tag3
-- **Topic:** [one-line description]
-
-## Main Message
-
-[1-2 sentences: the core thesis]
-
-## Key Concepts
-
-1. **[Concept]** — [brief explanation]
-2. **[Concept]** — [brief explanation]
-
-## Techniques & Tools
-
-- [Technique/tool]: [how it's used, why it matters]
-
-## Action Items
-
-- [ ] [Concrete takeaway]
-
-## Notable Examples
-
-- [Example]: [what it illustrates]
-```
-
-For non-YouTube sources, omit Channel/Published/Views/Likes/Engagement/Tags lines.
+2. Read template: `~/.claude/skills/media-extract/templates/summary-template.md`
+3. Analyze and extract key information following the template format
 
 ## Golden Nuggets Workflow
 
@@ -206,22 +169,10 @@ Generate YouTube-formatted chapter timestamps.
 **Steps:**
 
 1. Check metadata for native chapters (`metadata.chapters`)
-2. If native chapters exist: use them as the base, refine titles if needed
-3. If no native chapters: fetch transcript with `timestamped` format, analyze content flow and identify topic transitions
-4. First chapter MUST start at 00:00
-5. Target 8-15 chapters for 15-30min video (adjust proportionally)
-
-**Output format (ready to paste in YouTube):**
-
-```
-00:00 Introduction
-01:23 [Chapter title]
-04:56 [Chapter title]
-```
-
-No bullets, no markdown, no extra formatting.
-
-If native chapters were used, note: "Based on native YouTube chapters (refined titles)."
+2. Read template: `~/.claude/skills/media-extract/templates/chapters-template.md`
+3. If native chapters exist: use them as the base, refine titles if needed
+4. If no native chapters: fetch transcript with `timestamped` format, analyze content flow and identify topic transitions
+5. Follow template rules and output format
 
 ## Quotes Workflow
 
@@ -230,24 +181,9 @@ Extract quotable moments for clips or social posts.
 **Steps:**
 
 1. Get content from source
-2. Identify moments that are insightful, strong opinions, memorable analogies, practical wisdom
-3. For each quote: exact words, timestamp (if available), type, shareability rating
-
-**Output format:**
-
-```markdown
-# Quotes: [Title]
-
-## Top Quotes
-
-### [MM:SS] "[Exact quote]"
-
-- **Type:** insight | hot-take | wisdom | story | humor
-- **Shareability:** high | medium | low
-- **Context:** [1 sentence]
-```
-
-For text without timestamps, omit the timestamp and use sequential numbering.
+2. Read template: `~/.claude/skills/media-extract/templates/quotes-template.md`
+3. Identify moments matching the template criteria
+4. For each quote: exact words, timestamp (if available), type, shareability rating
 
 ## Workflow Extraction
 
@@ -275,78 +211,21 @@ Extract CLI commands and code examples.
 **Steps:**
 
 1. Get content from source
-2. Identify all terminal commands, code snippets, configuration examples
-3. Group by category
-4. Add context and purpose for each
-
-**Output format:**
-
-````markdown
-# Commands & Code: [Title]
-
-## Category: [Name]
-
-### [command-name]
-
-**Purpose:** [What it does]
-**Timestamp:** [if available]
-
-```bash
-[command with options]
-```
-````
-
-**Options explained:**
-
-- `--flag`: [what it does]
-
-## Quick Reference
-
-| Command | Purpose   | Example   |
-| ------- | --------- | --------- |
-| [cmd]   | [purpose] | [example] |
-
-````
+2. Read template: `~/.claude/skills/media-extract/templates/commands-code-template.md`
+3. Identify all terminal commands, code snippets, configuration examples
+4. Group by category and follow template format
 
 ## Breakdown Workflow
 
 Structural and competitive analysis (works for videos AND articles).
 
 **Steps:**
+
 1. Get content from source
-2. Analyze structure, hook, pacing, engagement techniques
-3. For articles: analyze headline, intro hook, section structure, CTAs, SEO patterns
-
-**Output format:**
-```markdown
-# Breakdown: [Title]
-
-- **Source:** [url or type]
-- **Duration/Length:** [estimate]
-
-## Structure
-
-### Hook
-- **Technique:** [type]
-- **Effectiveness:** [high/medium/low + why]
-
-### Content Format
-- **Type:** [listicle/tutorial/story/problem-solution]
-- **Sections:** [list with timestamps/positions]
-
-### Engagement Techniques
-- [Technique]: [example from content]
-
-## Communication Style
-- **Tone:** [description]
-- **Teaching approach:** [description]
-
-## Strengths
-- [What works well]
-
-## Opportunities
-- [What could be improved]
-````
+2. Read template: `~/.claude/skills/media-extract/templates/breakdown-template.md`
+3. Analyze structure, hook, pacing, engagement techniques
+4. For articles: analyze headline, intro hook, section structure, CTAs, SEO patterns
+5. Follow template format
 
 ## Full Extraction Workflow (Multi-File)
 
