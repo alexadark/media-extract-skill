@@ -9,6 +9,8 @@ A Claude Code skill for universal media extraction and analysis. Handles YouTube
 
 No MCP server, no Node.js, no npm. Just a bash script and yt-dlp.
 
+For YouTube videos, it also fetches full metadata: views, likes, subscribers, engagement rate, tags, duration, native chapters, and thumbnail URL.
+
 ## Installation
 
 ```bash
