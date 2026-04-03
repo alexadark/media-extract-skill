@@ -30,7 +30,9 @@ FORMAT="${4:-json}"
 
 if [[ -z "$MODE" || -z "$URL" ]]; then
   echo "Usage: fetch.sh <mode> <url> [lang] [format]" >&2
-  echo "Modes: transcript | metadata | all" >&2
+  echo "Modes: transcript | metadata | all | download" >&2
+  echo "Download format: fetch.sh download <url> <quality> [output_dir]" >&2
+  echo "  quality: analyze (420p) | keep (1080p)" >&2
   exit 1
 fi
 
@@ -109,91 +111,7 @@ decode_html_entities() {
 }
 
 # ---------------------------------------------------------------------------
-# Parse VTT file -> JSON array of {timestamp, offset, text}
-# ---------------------------------------------------------------------------
-parse_vtt() {
-  local vtt_file="$1"
-
-  if [[ ! -f "$vtt_file" ]]; then
-    echo "[]"
-    return
-  fi
-
-  awk '
-  BEGIN {
-    # State machine
-    in_cue = 0
-    prev_text = ""
-    prev_start = -1
-    count = 0
-    printf "["
-  }
-
-  # Skip header lines
-  /^WEBVTT/ { next }
-  /^Kind:/ { next }
-  /^Language:/ { next }
-  /^NOTE/ { next }
-  /^$/ {
-    in_cue = 0
-    next
-  }
-
-  # Timestamp line: 00:00:01.234 --> 00:00:04.567
-  /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\.[0-9]+ --> / {
-    in_cue = 1
-    # Parse start time
-    split($1, t, ":")
-    split(t[3], sec_ms, ".")
-    start_seconds = int(t[1]) * 3600 + int(t[2]) * 60 + int(sec_ms[1])
-    cue_text = ""
-    next
-  }
-
-  # Also handle MM:SS.mmm --> format (no hours)
-  /^[0-9][0-9]:[0-9][0-9]\.[0-9]+ --> / {
-    in_cue = 1
-    split($1, t, ":")
-    split(t[2], sec_ms, ".")
-    start_seconds = int(t[1]) * 60 + int(sec_ms[1])
-    cue_text = ""
-    next
-  }
-
-  # Text lines inside a cue
-  in_cue == 1 {
-    # Strip HTML tags (<c>, </c>, <c.colorXXXXXX>, position/alignment tags)
-    gsub(/<[^>]*>/, "")
-    # Strip leading/trailing whitespace
-    gsub(/^[ \t]+/, "")
-    gsub(/[ \t]+$/, "")
-
-    if ($0 != "") {
-      if (cue_text != "") {
-        cue_text = cue_text " " $0
-      } else {
-        cue_text = $0
-      }
-    }
-  }
-
-  # When we hit a blank line or end, flush the cue
-  # Actually we handle flush at timestamp detection and END
-  # Re-approach: flush previous cue when we detect a new timestamp
-  /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\.[0-9]+ --> / || /^[0-9][0-9]:[0-9][0-9]\.[0-9]+ --> / {
-    # This block already ran above via next, so we handle flush differently
-  }
-
-  END {
-    printf "]"
-  }
-  ' "$vtt_file" | cat
-  # The above awk approach is tricky for dedup; use a different strategy below.
-  :
-}
-
-# ---------------------------------------------------------------------------
-# Better VTT parser using a two-pass approach
+# VTT parser using a two-pass approach
 # ---------------------------------------------------------------------------
 parse_vtt_to_json() {
   local vtt_file="$1"
@@ -386,22 +304,24 @@ find_vtt_file() {
   local prefix="$1"
   local lang="$2"
 
-  # Try exact match first: prefix.lang.vtt
-  local exact="${prefix}.${lang}.vtt"
-  if [[ -f "$exact" ]]; then
-    echo "$exact"
-    return
-  fi
-
-  # Try auto-generated variants
-  for f in "${prefix}"*.${lang}*.vtt; do
-    if [[ -f "$f" ]]; then
-      echo "$f"
+  if [[ -n "$lang" ]]; then
+    # Try exact match first: prefix.lang.vtt
+    local exact="${prefix}.${lang}.vtt"
+    if [[ -f "$exact" ]]; then
+      echo "$exact"
       return
     fi
-  done
 
-  # Try any VTT file at the prefix
+    # Try auto-generated variants
+    for f in "${prefix}"*.${lang}*.vtt; do
+      if [[ -f "$f" ]]; then
+        echo "$f"
+        return
+      fi
+    done
+  fi
+
+  # Try any VTT file at the prefix (fallback, or default when no lang specified)
   for f in "${prefix}"*.vtt; do
     if [[ -f "$f" ]]; then
       echo "$f"
@@ -422,10 +342,15 @@ case "$MODE" in
   # -----------------------------------------------------------------------
   transcript)
     # Download subtitles only
+    # Build sub-lang flag only if LANG is non-empty
+    SUB_LANG_ARGS=()
+    if [[ -n "$LANG" ]]; then
+      SUB_LANG_ARGS=(--sub-lang "$LANG")
+    fi
     if ! yt-dlp \
       --write-auto-sub \
       --write-sub \
-      --sub-lang "$LANG" \
+      ${SUB_LANG_ARGS[@]+"${SUB_LANG_ARGS[@]}"} \
       --skip-download \
       --sub-format vtt \
       -o "${TEMP_PREFIX}" \
@@ -466,11 +391,16 @@ case "$MODE" in
   # ALL mode (single yt-dlp call for both)
   # -----------------------------------------------------------------------
   all)
+    # Build sub-lang flag only if LANG is non-empty
+    SUB_LANG_ARGS=()
+    if [[ -n "$LANG" ]]; then
+      SUB_LANG_ARGS=(--sub-lang "$LANG")
+    fi
     JSON_DATA="$(yt-dlp \
       --dump-json \
       --write-auto-sub \
       --write-sub \
-      --sub-lang "$LANG" \
+      ${SUB_LANG_ARGS[@]+"${SUB_LANG_ARGS[@]}"} \
       --skip-download \
       --sub-format vtt \
       -o "${TEMP_PREFIX}" \
@@ -504,8 +434,86 @@ case "$MODE" in
     cleanup_temp
     ;;
 
+  # -----------------------------------------------------------------------
+  # DOWNLOAD mode
+  # -----------------------------------------------------------------------
+  download)
+    QUALITY="${LANG:-analyze}"  # reuse LANG positional arg for quality
+    OUTPUT_DIR="${FORMAT:-/tmp/media-extract-downloads}"
+
+    mkdir -p "$OUTPUT_DIR"
+
+    case "$QUALITY" in
+      analyze)
+        # 420p MP4 - lightweight for Gemini visual analysis
+        echo "Downloading (420p for analysis)..." >&2
+        yt-dlp \
+          -f "bestvideo[height<=420][ext=mp4]+bestaudio[ext=m4a]/best[height<=420][ext=mp4]/bestvideo[height<=480]+bestaudio/best[height<=480]" \
+          --merge-output-format mp4 \
+          -o "${OUTPUT_DIR}/%(id)s-%(title)s.%(ext)s" \
+          --restrict-filenames \
+          --no-playlist \
+          "$URL" 2>/tmp/media-extract-ytdlp-err-${VIDEO_ID}
+        ;;
+      keep)
+        # 1080p MP4 - good quality for watching
+        echo "Downloading (1080p for keeping)..." >&2
+        yt-dlp \
+          -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/bestvideo[height<=1080]+bestaudio/best[height<=1080]" \
+          --merge-output-format mp4 \
+          -o "${OUTPUT_DIR}/%(id)s-%(title)s.%(ext)s" \
+          --restrict-filenames \
+          "$URL" 2>/tmp/media-extract-ytdlp-err-${VIDEO_ID}
+        ;;
+      playlist)
+        # Playlist download - 420p for batch analysis
+        echo "Downloading playlist (420p for analysis)..." >&2
+        yt-dlp \
+          -f "bestvideo[height<=420][ext=mp4]+bestaudio[ext=m4a]/best[height<=420][ext=mp4]/bestvideo[height<=480]+bestaudio/best[height<=480]" \
+          --merge-output-format mp4 \
+          -o "${OUTPUT_DIR}/%(playlist_index)03d-%(id)s-%(title)s.%(ext)s" \
+          --restrict-filenames \
+          "$URL" 2>/tmp/media-extract-ytdlp-err-${VIDEO_ID}
+        ;;
+      *)
+        echo "Error: Unknown quality '$QUALITY'. Use: analyze, keep, playlist" >&2
+        exit 1
+        ;;
+    esac
+
+    DL_EXIT=$?
+    if [[ $DL_EXIT -ne 0 ]]; then
+      cat /tmp/media-extract-ytdlp-err-${VIDEO_ID} >&2
+      rm -f /tmp/media-extract-ytdlp-err-${VIDEO_ID}
+      exit 1
+    fi
+    rm -f /tmp/media-extract-ytdlp-err-${VIDEO_ID}
+
+    # Output the path(s) of downloaded files as JSON
+    echo "{"
+    echo "  \"output_dir\": \"${OUTPUT_DIR}\","
+    echo "  \"quality\": \"${QUALITY}\","
+    echo "  \"files\": ["
+    FIRST=true
+    for f in "${OUTPUT_DIR}"/*.mp4; do
+      if [[ -f "$f" ]]; then
+        if [[ "$FIRST" == "true" ]]; then
+          FIRST=false
+        else
+          echo ","
+        fi
+        SIZE=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null || echo "0")
+        SIZE_MB=$(echo "scale=1; $SIZE / 1048576" | bc 2>/dev/null || echo "unknown")
+        printf '    {"path": "%s", "size_mb": "%s"}' "$f" "$SIZE_MB"
+      fi
+    done
+    echo ""
+    echo "  ]"
+    echo "}"
+    ;;
+
   *)
-    echo "Error: Unknown mode '$MODE'. Use: transcript, metadata, all" >&2
+    echo "Error: Unknown mode '$MODE'. Use: transcript, metadata, all, download" >&2
     exit 1
     ;;
 esac

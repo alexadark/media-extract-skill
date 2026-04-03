@@ -1,28 +1,36 @@
 ---
 name: media-extract
-description: Universal media extraction and analysis. Handles YouTube videos (with full metadata), web articles, raw transcripts, and pasted text. Extracts structured summaries, golden nuggets, workflows, commands, code examples, chapters, quotes, and competitive breakdowns. Use when user shares a YouTube URL, article URL, pastes a transcript, or asks to analyze any content.
+description: Universal media extraction and analysis. Handles YouTube videos (visual + transcript), web articles, local files (video, audio, PDF, text), pasted content, and folders of videos. Extracts structured summaries, visual analysis via Gemini, golden nuggets, workflows, commands, code examples, chapters, quotes, and breakdowns. Downloads YouTube videos. Cleans meeting transcripts (Fathom, Otter, Zoom) by removing timestamps, filler words, small talk. Use when user shares a YouTube URL, article URL, pastes a transcript, points to local media, asks to analyze/download any content, or says "clean this transcript", "nettoyer", "remove timestamps".
 ---
 
 <essential_principles>
 
 <principle name="universal-input">
 This skill handles ANY content source:
-- **YouTube URL** → Fetch transcript + metadata via local bash script, then analyze
-- **Article/web URL** → Fetch via WebFetch tool, then analyze
-- **Pasted text** → Analyze directly (transcript, meeting notes, documentation, etc.)
-- **File path** → Read file content, then analyze
-The extraction workflows are the same regardless of source.
+- **YouTube URL** - Transcript + metadata via yt-dlp, OR download + Gemini visual analysis
+- **YouTube playlist/channel** - Batch download + Gemini visual analysis
+- **Web URL** - Fetch via WebFetch or linkup-fetch (for JS-heavy pages), then analyze
+- **Local video file** - Upload to Gemini for visual analysis
+- **Local audio file** - Upload to Gemini for analysis
+- **Local document** - Read file content (PDF, MD, TXT, SRT, etc.)
+- **Pasted text** - Analyze directly (transcript, meeting notes, documentation, etc.)
+- **Folder of videos** - Batch Gemini visual analysis
 </principle>
 
 <principle name="self-contained">
 YouTube data fetched via a local bash script using yt-dlp. No MCP server, no Node.js, no npm.
-Script at `~/.claude/skills/media-extract/fetch.sh`.
+Script at `~/.claude/skills/content/media-extract/fetch.sh`.
 Requires: `yt-dlp` (`brew install yt-dlp`) and `jq` (`brew install jq`).
+
+Visual analysis uses Gemini via a Python script.
+Script at `~/.claude/skills/content/media-extract/scripts/extract.py`.
+Requires: `google-genai` (`pip install google-genai`).
+API key: copy `.env.example` to `.env` and add your Gemini API key. The script loads it automatically.
 </principle>
 
 <principle name="utility-first">
 This is a utility skill. It extracts and transforms content into structured formats.
-It does NOT add personality, voice, or branding. Skills that consume this output (Second Brain, YouTube Planner, Learn Anything) handle the creative layer.
+It does NOT add personality, voice, or branding. Skills that consume this output handle the creative layer.
 </principle>
 
 <principle name="structured-output">
@@ -36,39 +44,54 @@ When timestamps are available (video transcripts, meeting recordings), preserve 
 
 </essential_principles>
 
+<configuration>
+
+On first use, check if config exists at `~/.media-extract/config.json`.
+
+If not, create it with defaults:
+
+```json
+{
+  "save_transcripts": true,
+  "transcript_dir": "~/.media-extract/cache/transcripts",
+  "download_dir": "~/Downloads"
+}
+```
+
+Mention to the user: "Config saved at ~/.media-extract/config.json - edit anytime to change transcript/download paths."
+
+If config exists, read it silently and use the settings.
+
+When `save_transcripts` is true: after fetching a YouTube transcript, save it to the transcript directory as `{video-id}-{slug}.md` with metadata header. Before fetching, check if a cached transcript exists and reuse it.
+
+</configuration>
+
 <source_detection>
 
-Detect the content source type:
+Detect the content source type from the input:
 
-1. **YouTube URL** — Contains `youtube.com`, `youtu.be`, or `youtube.com/shorts`
-   → Fetch transcript + metadata in one call:
+1. **YouTube URL** - Contains `youtube.com`, `youtu.be`, or `youtube.com/shorts`
+   - Single video URL - route based on intent
+   - Playlist URL (contains `list=`) - batch mode
 
-   ```bash
-   ~/.claude/skills/media-extract/fetch.sh all "<url>" "<lang>"
-   ```
+2. **Web URL** - Any other URL (article, blog post, documentation)
+   - Standard HTML - Use WebFetch with prompt "Return the full article content as markdown"
+   - If WebFetch returns poor results (empty, less than 100 chars, login wall) - retry with linkup-fetch (`renderJs: true`)
 
-   This returns BOTH transcript AND metadata in a single JSON response.
+3. **Local video file** - Path ending in `.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`, `.m4v`, `.flv`
+   - Route to Gemini visual analysis
 
-   When only transcript is needed (e.g., chapters workflow):
+4. **Local audio file** - Path ending in `.mp3`, `.wav`, `.m4a`, `.aac`, `.ogg`, `.flac`
+   - Route to Gemini analysis
 
-   ```bash
-   ~/.claude/skills/media-extract/fetch.sh transcript "<url>" "<lang>" "timestamped"
-   ```
+5. **Local document** - Path ending in `.pdf`, `.md`, `.txt`, `.srt`, `.doc`, `.docx`
+   - Read the file content, then analyze with Claude
 
-   When only metadata is needed:
+6. **Folder path** - Path to a directory
+   - Scan for video files, route to batch Gemini analysis
 
-   ```bash
-   ~/.claude/skills/media-extract/fetch.sh metadata "<url>"
-   ```
-
-2. **Web URL** — Any other URL (article, blog post, documentation)
-   → Fetch content: Use WebFetch tool with prompt "Return the full article content as markdown"
-
-3. **Pasted text** — No URL detected, text provided directly
-   → Use the text as-is. Detect if it's a transcript (has timestamps/speaker labels) or plain text.
-
-4. **File path** — Path to a local file (.txt, .srt, .md)
-   → Read the file content
+7. **Pasted text** - No URL detected, no file path
+   - Use the text as-is. Detect if it's a transcript (has timestamps/speaker labels) or plain text.
 
 </source_detection>
 
@@ -86,7 +109,7 @@ When processing YouTube URLs, automatically include metadata in the output heade
 
 Calculate engagement rate as: `(like_count / view_count) * 100`, rounded to 2 decimal places.
 
-If the video has native YouTube chapters (metadata.chapters is not null), mention them:
+If the video has native YouTube chapters (metadata.chapters is not null):
 
 ```markdown
 - **Native Chapters:** Yes (N chapters)
@@ -96,198 +119,112 @@ If the video has native YouTube chapters (metadata.chapters is not null), mentio
 
 <intake>
 
-Detect the user's intent and route to the right workflow:
+Detect the user's intent and route to the right workflow.
+After detecting intent, read the corresponding workflow file from `references/workflows/`.
 
-**Analysis Workflows** (what to extract):
+<intent name="visual-analysis">
+Triggers: "watch this", "look at this video", "what's on screen", "show me the code", "visual analysis", "make a course from this", "teach me from this video", "analyze the video visually", "what are they showing", "extract the code from screen"
+Right choice when: video shows code, terminal, UI, diagrams, architecture on screen.
+Read: `references/workflows/visual-analysis.md`
+</intent>
 
-1. **Summary**: "summarize", "what's this about", URL without instruction
-   → Execute **summary** workflow
+<intent name="download">
+Triggers: "download this", "save this video", "I want to keep it", "download for later"
+Read: `references/workflows/download.md`
+</intent>
 
-2. **Golden Nuggets**: "golden nuggets", "key insights", "best insights", "extract nuggets"
-   → Execute **golden-nuggets** workflow
+<intent name="summary">
+Triggers: "summarize", "what's this about", URL without specific instruction
+Read: `references/workflows/summary.md`
+</intent>
 
-3. **Chapters**: "generate chapters", "timestamps", "create chapters" (video only)
-   → Execute **chapters** workflow
+<intent name="golden-nuggets">
+Triggers: "golden nuggets", "key insights", "best insights", "extract nuggets"
+Read: `references/workflows/golden-nuggets.md`
+</intent>
 
-4. **Quotes**: "find quotes", "best moments", "quotable moments", "clips"
-   → Execute **quotes** workflow
+<intent name="chapters">
+Triggers: "generate chapters", "timestamps", "create chapters" (video only)
+Read: `references/workflows/chapters.md`
+</intent>
 
-5. **Workflows**: "extract workflow", "step-by-step", "extract the process"
-   → Execute **workflow-extraction** workflow
+<intent name="quotes">
+Triggers: "find quotes", "best moments", "quotable moments", "clips"
+Read: `references/workflows/quotes.md`
+</intent>
 
-6. **Commands & Code**: "extract commands", "code examples", "CLI commands"
-   → Execute **commands-code** workflow
+<intent name="workflow-extraction">
+Triggers: "extract workflow", "step-by-step", "extract the process"
+Read: `references/workflows/workflow-extraction.md`
+</intent>
 
-7. **Breakdown**: "analyze", "how did they structure it", "video breakdown"
-   → Execute **breakdown** workflow
+<intent name="commands-code">
+Triggers: "extract commands", "code examples", "CLI commands"
+Read: `references/workflows/commands-code.md`
+</intent>
 
-8. **Full Extraction**: "extract everything", "full extraction", "deep dive extraction"
-   → Execute **full-extraction** workflow (multi-file output)
+<intent name="breakdown">
+Triggers: "how did they structure it", "video breakdown", "content structure"
+Read: `references/workflows/breakdown.md`
+</intent>
 
-9. **Batch**: Multiple URLs/texts provided, or "compare these"
-   → Execute the relevant workflow for each, then compare
+<intent name="full-extraction">
+Triggers: "extract everything", "full extraction", "deep dive extraction"
+Read: `references/workflows/full-extraction.md`
+</intent>
 
-If a URL/text is provided without a specific command, default to **summary**.
-If called programmatically by another skill, return structured output without extra commentary.
+<intent name="clean">
+Triggers: "clean this transcript", "clean this", "remove timestamps", "nettoyer", "enlever les timestamps", "enlever le fluff", "clean the meeting notes"
+Right choice when: pasted text with timestamps/speaker labels from meeting tools (Fathom, Otter, Zoom), or user wants business-only content extracted from a conversation transcript.
+Read: `references/workflows/clean.md`
+</intent>
+
+<intent name="batch">
+Triggers: Multiple URLs/texts provided, playlist URL, or "compare these"
+Read: `references/workflows/batch.md`
+</intent>
+
+<defaults>
+- YouTube URL without instruction - **summary**
+- YouTube URL with "analyze", "look at", "what's in this" - **visual-analysis**
+- Web URL without instruction - **summary**
+- Local video file - **visual-analysis**
+- Pasted text - **summary** (or **clean** if it has timestamps/speaker labels from meeting tools)
+- If called programmatically by another skill, return structured output without extra commentary.
+</defaults>
 
 </intake>
 
-<workflows>
-
-## Summary Workflow
-
-Deep structured summary of content from any source.
-
-**Steps:**
-
-1. Get content (fetch YouTube transcript + metadata, fetch article, or use pasted text)
-2. Read template: `~/.claude/skills/media-extract/templates/summary-template.md`
-3. Analyze and extract key information following the template format
-
-## Golden Nuggets Workflow
-
-Extract key insights, tips, and memorable moments. Uses the golden nugget template for deep extraction.
-
-**Steps:**
-
-1. Get content from source
-2. Read template: `~/.claude/skills/media-extract/templates/golden-nugget-format.md`
-3. Identify insights that are: actionable, surprising, quotable, or paradigm-shifting
-4. Categorize by theme (Philosophy, Best Practices, Tips & Tricks)
-5. Rate importance (1-5)
-
-**Output format:** Follow the golden-nugget-format.md template. Always include:
-
-- Quick Reference: Top 5 Nuggets
-- Nuggets by Theme
-- Actionable Takeaways
-
-## Chapters Workflow (video/audio only)
-
-Generate YouTube-formatted chapter timestamps.
-
-**Steps:**
-
-1. Check metadata for native chapters (`metadata.chapters`)
-2. Read template: `~/.claude/skills/media-extract/templates/chapters-template.md`
-3. If native chapters exist: use them as the base, refine titles if needed
-4. If no native chapters: fetch transcript with `timestamped` format, analyze content flow and identify topic transitions
-5. Follow template rules and output format
-
-## Quotes Workflow
-
-Extract quotable moments for clips or social posts.
-
-**Steps:**
-
-1. Get content from source
-2. Read template: `~/.claude/skills/media-extract/templates/quotes-template.md`
-3. Identify moments matching the template criteria
-4. For each quote: exact words, timestamp (if available), type, shareability rating
-
-## Workflow Extraction
-
-Extract step-by-step processes and procedures from content.
-
-**Steps:**
-
-1. Get content from source
-2. Read template: `~/.claude/skills/media-extract/templates/workflow-template.md`
-3. Identify all processes, procedures, and step-by-step instructions
-4. For each workflow: name, steps with detail, commands if any, validation checklist
-
-**Output format:** Follow the workflow-template.md template. Include:
-
-- Clear numbered steps
-- Commands/code per step (if applicable)
-- Expected output per step
-- Validation checklist
-- Common issues & solutions
-
-## Commands & Code Extraction
-
-Extract CLI commands and code examples.
-
-**Steps:**
-
-1. Get content from source
-2. Read template: `~/.claude/skills/media-extract/templates/commands-code-template.md`
-3. Identify all terminal commands, code snippets, configuration examples
-4. Group by category and follow template format
-
-## Breakdown Workflow
-
-Structural and competitive analysis (works for videos AND articles).
-
-**Steps:**
-
-1. Get content from source
-2. Read template: `~/.claude/skills/media-extract/templates/breakdown-template.md`
-3. Analyze structure, hook, pacing, engagement techniques
-4. For articles: analyze headline, intro hook, section structure, CTAs, SEO patterns
-5. Follow template format
-
-## Full Extraction Workflow (Multi-File)
-
-Comprehensive extraction split into multiple files.
-
-**Steps:**
-
-1. Get content from source
-2. Read template: `~/.claude/skills/media-extract/templates/multi-file-output-template.md`
-3. Ask user for output directory (or use current directory)
-4. Generate files: INDEX.md, summary.md, workflows.md, commands.md, golden-nuggets.md, code-examples.md
-5. Only generate files that have content (skip empty categories)
-
-**Output:** Multiple files following the multi-file-output-template.md structure.
-
-</workflows>
-
 <saving_output>
 
-When saving to files, use this naming:
-
-```
-[type]-[source]-[slug].md
-```
+When saving to files, use this naming: `[type]-[source]-[slug].md`
 
 Examples:
 
 - `summary-yt-how-to-build-mcp-servers.md`
+- `visual-yt-claude-code-tutorial.md`
 - `nuggets-article-react-router-v7-guide.md`
-- `breakdown-yt-competitor-launch-video.md`
-- `workflows-transcript-team-meeting-jan.md`
 
 Where to save depends on calling context:
 
 - **Direct call**: current working directory, or ask user
-- **Learn Anything**: `research/` folder
-- **Second Brain**: relevant project/content folder
-- **YouTube Planner**: project's research folder
+- **Called by another skill**: let the calling skill decide
+
+When `save_transcripts` is enabled in config:
+
+1. Before fetching, check `{transcript_dir}/{video-id}-*.md` for cached version
+2. If found, use cached transcript (skip yt-dlp call)
+3. If not found, fetch and save with metadata header (video_id, title, channel, date, duration, url)
 
 </saving_output>
 
-<batch_mode>
+<success_criteria>
 
-When processing multiple sources, after individual outputs provide a comparison:
-
-```markdown
-## Comparison
-
-| Aspect             | Source 1             | Source 2 | Source 3 |
-| ------------------ | -------------------- | -------- | -------- |
-| Type               | [video/article/text] | ...      | ...      |
-| Length             | ...                  | ...      | ...      |
-| Structure          | ...                  | ...      | ...      |
-| Key differentiator | ...                  | ...      | ...      |
-
-### Patterns Across Sources
-
-- [Common patterns]
-
-### Unique Approaches
-
-- [Source X] does [thing] differently: [how]
-```
-
-</batch_mode>
+- Source type correctly detected from input
+- Correct workflow selected based on intent
+- Output follows the corresponding template format
+- YouTube metadata header included when processing YouTube URLs
+- Timestamps preserved when available
+- Transcript cached when config enables it
+- No empty sections in output (skip sections with no content)
+  </success_criteria>
