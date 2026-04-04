@@ -22,11 +22,25 @@ Universal media extraction and analysis skill for Claude Code. Extracts structur
 brew install yt-dlp jq
 ```
 
-### Optional (for visual analysis)
+### Required for visual analysis
+
+Visual analysis (Gemini multimodal) lets Claude see what's on screen in videos - code, terminal, UI, diagrams. It requires:
 
 - Python 3.8+
-- [google-genai](https://pypi.org/project/google-genai/) - Gemini API client
+- The [gemini-api-dev](https://github.com/google-gemini/gemini-skills/tree/main/skills/gemini-api-dev) Claude Code skill
 - A [Gemini API key](https://aistudio.google.com/apikey)
+
+Install the Gemini skill (pick one method):
+
+```bash
+# Using Vercel Skills CLI
+npx skills add google-gemini/gemini-skills --skill gemini-api-dev --global
+
+# OR using Context7 Skills CLI
+npx ctx7 skills install /google-gemini/gemini-skills gemini-api-dev
+```
+
+Then install the Python SDK (used by the extraction script):
 
 ```bash
 pip install google-genai
@@ -40,7 +54,7 @@ pip install google-genai
 cp -r media-extract ~/.claude/skills/content/media-extract
 ```
 
-2. **(For visual analysis only)** Set up your Gemini API key:
+2. **(For visual analysis)** Set up your Gemini API key:
 
 ```bash
 cd ~/.claude/skills/content/media-extract
@@ -63,7 +77,7 @@ yt-dlp --version
 # Test jq
 jq --version
 
-# Test Gemini (optional)
+# Test Gemini skill + SDK
 python3 -c "from google import genai; print('OK')"
 ```
 
@@ -157,6 +171,7 @@ media-extract/
       breakdown.md
       full-extraction.md
       batch.md
+      clean.md
 ```
 
 ## Sub-commands
@@ -174,9 +189,9 @@ This skill also registers slash command variants:
 
 **"jq not installed"** - Run `brew install jq`
 
-**"google-genai package not installed"** - Run `pip install google-genai`
+**"google-genai package not installed"** - Run `pip install google-genai`. Also make sure the [gemini-api-dev](https://github.com/google-gemini/gemini-skills/tree/main/skills/gemini-api-dev) skill is installed.
 
-**"GEMINI_API_KEY not set"** - Copy `.env.example` to `.env` and add your key
+**"GEMINI_API_KEY not set"** - Copy `.env.example` to `.env` and add your key from [Google AI Studio](https://aistudio.google.com/apikey)
 
 **No subtitles available** - The video may not have auto-generated captions. Try visual analysis instead.
 
